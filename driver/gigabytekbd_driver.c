@@ -25,14 +25,27 @@ MODULE_LICENSE("GPL v2");
 //TODO: If put in mainstream kernel, modify this file to include the VID and PID.
 //#include "hid-ids.h"
 
-#define HIDRAW_FN_ESC 0x04000084
-#define HIDRAW_FN_F2 0x0400007C
-#define HIDRAW_FN_F3 0x0400007D
-#define HIDRAW_FN_F4 0x0400007E
-#define HIDRAW_FN_F6 0x04000080
-#define HIDRAW_FN_F10 0x04000081
-#define HIDRAW_FN_F11 0x04000082
-#define HIDRAW_FN_F12 0x04000083
+#define HIDRAW_FN_ESC        0x04000084
+#define HIDRAW_FN_F2         0x0400007C
+#define HIDRAW_FN_F3         0x0400007D
+#define HIDRAW_FN_F4         0x0400007E
+#define HIDRAW_FN_F5         0x0400007F
+#define HIDRAW_FN_F6         0x04000080
+#define HIDRAW_FN_F8_PRESS   0x04000186
+#define HIDRAW_FN_F8_RELEASE 0x04000086
+#define HIDRAW_FN_F9_PRESS   0x04000187
+#define HIDRAW_FN_F9_RELEASE 0x04000087
+
+// HID keyboard page usage for KeyboardF20, reported by the Fn key on some models.
+#define HID_USAGE_KEYBOARD_F20 0x6f
+
+#define HIDRAW_FN_F10        0x04000081
+#define HIDRAW_FN_F11        0x04000082
+#define HIDRAW_FN_F12        0x04000083
+#define HIDRAW_FN_F12_ALT    0x04000088
+
+// HID keyboard page usage for KeyboardF20, reported by the Fn key on some models.
+#define HID_USAGE_KEYBOARD_F20 0x6f
 
 #define make_u32(a, b, c, d) a << 24 | b << 16 | c << 8 | d
 
@@ -40,11 +53,12 @@ struct backlight_device* gigabyte_kbd_backlight_device;
 struct device_driver* gigabyte_kbd_touchpad_driver;
 struct device* gigabyte_kbd_touchpad_device;
 struct input_dev* gigabyte_kbd_input_device;
+static struct backlight_device *gigabyte_kbd_find_backlight(void);
 
 static inline int gigabyte_kbd_is_backlight_off(void)
 {
 	if (!gigabyte_kbd_backlight_device)
-		return 1;
+		return 0;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
 	return backlight_is_blank(gigabyte_kbd_backlight_device);
@@ -87,63 +101,186 @@ static void gigabyte_kbd_touchpad_toggle_driver(struct work_struct* s)
 DECLARE_WORK(gigabyte_kbd_backlight_toggle_work, gigabyte_kbd_backlight_toggle);
 DECLARE_WORK(gigabyte_kbd_touchpad_toggle_driver_work, gigabyte_kbd_touchpad_toggle_driver);
 
-static int gigabyte_kbd_raw_event(struct hid_device *hdev, struct hid_report *report, u8 *rd, int size)
+static int gigabyte_kbd_raw_event(struct hid_device *hdev,
+                                  struct hid_report *report,
+                                  u8 *rd, int size)
 {
-	if (report->id == 4 && size == 4)
+    if (report->id != 4 || size != 4)
+        return 0;
+
+    u32 hidraw = make_u32(rd[0], rd[1], rd[2], rd[3]);
+
+    switch (hidraw)
+    {
+    case HIDRAW_FN_ESC:
+        /* Fan control placeholder */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device, KEY_PROG2, 1);
+            input_sync(gigabyte_kbd_input_device);
+            input_report_key(gigabyte_kbd_input_device, KEY_PROG2, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F2:
+        /* Wi-Fi toggle */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device, KEY_WLAN, 1);
+            input_sync(gigabyte_kbd_input_device);
+            input_report_key(gigabyte_kbd_input_device, KEY_WLAN, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F3:
+        rd[0] = 0x03;
+        rd[1] = 0x70;
+        rd[2] = 0x00;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+        hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 4, 0);
+#else
+        hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 0);
+#endif
+
+        rd[0] = 0x03;
+        rd[1] = 0x00;
+        rd[2] = 0x00;
+
+        return 1;
+
+    case HIDRAW_FN_F4:
+        rd[0] = 0x03;
+        rd[1] = 0x6f;
+        rd[2] = 0x00;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+        hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 4, 0);
+#else
+        hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 0);
+#endif
+
+        rd[0] = 0x03;
+        rd[1] = 0x00;
+        rd[2] = 0x00;
+
+        return 1;
+
+    case HIDRAW_FN_F5:
+        /* Display switch */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device,
+                             KEY_SWITCHVIDEOMODE, 1);
+            input_sync(gigabyte_kbd_input_device);
+
+            input_report_key(gigabyte_kbd_input_device,
+                             KEY_SWITCHVIDEOMODE, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F6:
+        /* Keyboard backlight toggle */
+        if (gigabyte_kbd_backlight_device)
+            schedule_work(&gigabyte_kbd_backlight_toggle_work);
+
+        return 0;
+
+    case HIDRAW_FN_F8_PRESS:
+        /* Volume down */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device,
+                             KEY_VOLUMEDOWN, 1);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F8_RELEASE:
+        /* Volume down release */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device,
+                             KEY_VOLUMEDOWN, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F9_PRESS:
+        /* Volume up */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device,
+                             KEY_VOLUMEUP, 1);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F9_RELEASE:
+        /* Volume up release */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device,
+                             KEY_VOLUMEUP, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F10:
+        /* Touchpad toggle */
+        if (gigabyte_kbd_touchpad_device)
+            schedule_work(&gigabyte_kbd_touchpad_toggle_driver_work);
+
+        return 0;
+
+    case HIDRAW_FN_F11:
+        /* Airplane mode / RF kill */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device, KEY_RFKILL, 1);
+            input_sync(gigabyte_kbd_input_device);
+
+            input_report_key(gigabyte_kbd_input_device, KEY_RFKILL, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    case HIDRAW_FN_F12:
+    case HIDRAW_FN_F12_ALT:
+        /* Programmable key */
+        if (gigabyte_kbd_input_device)
+        {
+            input_report_key(gigabyte_kbd_input_device, KEY_PROG1, 1);
+            input_sync(gigabyte_kbd_input_device);
+
+            input_report_key(gigabyte_kbd_input_device, KEY_PROG1, 0);
+            input_sync(gigabyte_kbd_input_device);
+        }
+        return 1;
+
+    default:
+        return 0;
+    }
+}
+
+static int gigabyte_kbd_input_mapping(struct hid_device *hdev, struct hid_input *hi,
+	struct hid_field *field, struct hid_usage *usage, unsigned long **bit, int *max)
+{
+	// On the Aorus 16X the Fn key reports KeyboardF20 as an ordinary key press on
+	// top of acting as a hardware modifier. Userspace reads KEY_F20 as the mic mute
+	// key, so every Fn press (i.e. every Fn combo) toggles the microphone. Report it
+	// as KEY_FN instead, which desktop environments ignore.
+	// Only done for models known to do this - other Gigabyte laptops have macro keys
+	// that legitimately emit the F13-F24 range.
+	if (hdev->product == USB_DEVICE_ID_GIGABYTE_AORUS16X
+		&& (usage->hid & HID_USAGE_PAGE) == HID_UP_KEYBOARD
+		&& (usage->hid & HID_USAGE) == HID_USAGE_KEYBOARD_F20)
 	{
-		u32 hidraw = make_u32(rd[0], rd[1], rd[2], rd[3]);
-		// printk("Gigabyte kbd raw event. hidraw code : %x", hidraw);
-		switch (hidraw)
-		{
-		case HIDRAW_FN_F3:
-			if (gigabyte_kbd_is_backlight_off())
-				return 0;
-
-			rd[0] = 0x03;rd[1] = 0x70;rd[2] = 0x00;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-			hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 4, 0);
-#else
-			hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 0);
-#endif
-			rd[0] = 0x03;rd[1] = 0x00;rd[2] = 0x00;
-			return 1;
-		case HIDRAW_FN_F4:
-			if (gigabyte_kbd_is_backlight_off())
-				return 0;
-
-			rd[0] = 0x03;rd[1] = 0x6f;rd[2] = 0x00;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-			hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 4, 0);
-#else
-			hid_report_raw_event(hdev, HID_INPUT_REPORT, rd, 4, 0);
-#endif
-			rd[0] = 0x03;rd[1] = 0x00;rd[2] = 0x00;
-			return 1;
-		case HIDRAW_FN_F6:
-			if (gigabyte_kbd_backlight_device)
-			{
-				schedule_work(&gigabyte_kbd_backlight_toggle_work);
-			}
-			return 0;
-		case HIDRAW_FN_F10:
-			if (gigabyte_kbd_touchpad_device)
-			{
-				schedule_work(&gigabyte_kbd_touchpad_toggle_driver_work);
-			}
-			return 0;
-		case HIDRAW_FN_F11:
-			if (gigabyte_kbd_input_device)
-			{
-				input_report_key(gigabyte_kbd_input_device, KEY_RFKILL, 1);
-				input_sync(gigabyte_kbd_input_device);
-				input_report_key(gigabyte_kbd_input_device, KEY_RFKILL, 0);
-				input_sync(gigabyte_kbd_input_device);
-			}
-			return 0;
-		default:
-			return 0;
-			break;
-		}
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, KEY_FN);
+		return 1;
 	}
 	return 0;
 }
@@ -186,17 +323,20 @@ static int gigabyte_kbd_probe(struct hid_device *hdev, const struct hid_device_i
 	ret = hid_parse(hdev);
 	if (ret)
 		return ret;
-
- 	gigabyte_kbd_backlight_device = backlight_device_get_by_name(GIGABYTE_KBD_BACKLIGHT_DEVICE_NAME);
-	gigabyte_kbd_touchpad_device = bus_find_device(&i2c_bus_type, NULL, NULL, gigabyte_kbd_match_touchpad_device);
-
-	if (gigabyte_kbd_touchpad_device)
+	if (!gigabyte_kbd_backlight_device)
+	 	gigabyte_kbd_backlight_device = gigabyte_kbd_find_backlight();
+	if (!gigabyte_kbd_touchpad_device)
 	{
-		gigabyte_kbd_touchpad_driver = gigabyte_kbd_touchpad_device->driver;
-	}
-	else
-	{
-		printk(KERN_ERR "Touchpad acpi device not found");
+		gigabyte_kbd_touchpad_device = bus_find_device(&i2c_bus_type, NULL, NULL, gigabyte_kbd_match_touchpad_device);
+
+		if (gigabyte_kbd_touchpad_device)
+		{
+			gigabyte_kbd_touchpad_driver = gigabyte_kbd_touchpad_device->driver;
+		}
+		else
+		{
+			printk(KERN_ERR "Touchpad acpi device not found");
+		}
 	}
 
 	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
@@ -206,14 +346,43 @@ static int gigabyte_kbd_probe(struct hid_device *hdev, const struct hid_device_i
 	// Advertise KEY_RFKILL so we can report the Fn+F11 airplane-mode
 	// press to userspace, which owns the actual soft/hard-block policy
 	// via rfkill (there is no in-kernel "toggle all radios" API anymore).
-	list_for_each_entry(hidinput, &hdev->inputs, list)
-	{
-		input_set_capability(hidinput->input, EV_KEY, KEY_RFKILL);
-		if (!gigabyte_kbd_input_device)
-			gigabyte_kbd_input_device = hidinput->input;
-	}
+list_for_each_entry(hidinput, &hdev->inputs, list)
+{
+    input_set_capability(hidinput->input, EV_KEY, KEY_RFKILL);
+    input_set_capability(hidinput->input, EV_KEY, KEY_WLAN);
+    input_set_capability(hidinput->input, EV_KEY, KEY_SWITCHVIDEOMODE);
+    input_set_capability(hidinput->input, EV_KEY, KEY_VOLUMEDOWN);
+    input_set_capability(hidinput->input, EV_KEY, KEY_VOLUMEUP);
+    input_set_capability(hidinput->input, EV_KEY, KEY_PROG1);
+    input_set_capability(hidinput->input, EV_KEY, KEY_PROG2);
+
+    if (!gigabyte_kbd_input_device)
+        gigabyte_kbd_input_device = hidinput->input;
+}
 
 	return 0;
+}
+
+static struct backlight_device *gigabyte_kbd_find_backlight(void)
+{
+    static const char * const names[] = {
+        "intel_backlight",
+        "nvidia_0",
+        "nvidia_wmi_ec_backlight",
+        "amdgpu_bl0",
+        "acpi_video0",
+    };
+
+    struct backlight_device *bd;
+    int i;
+
+    for (i = 0; i < ARRAY_SIZE(names); i++) {
+        bd = backlight_device_get_by_name(names[i]);
+        if (bd)
+            return bd;
+    }
+
+    return NULL;
 }
 
 static const struct hid_device_id gigabyte_kbd_devices[] = {
@@ -233,5 +402,6 @@ static struct hid_driver gigabyte_kbd_driver = {
 	.name = "gigabytekbd",
 	.id_table = gigabyte_kbd_devices,
 	.probe = gigabyte_kbd_probe,
+	.input_mapping = gigabyte_kbd_input_mapping,
 	.raw_event = gigabyte_kbd_raw_event};
 module_hid_driver(gigabyte_kbd_driver);
